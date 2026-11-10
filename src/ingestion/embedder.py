@@ -1,13 +1,41 @@
-# src/ingestion/embedder.py
+"""Embedding generator: wraps SentenceTransformer for CPU-based encoding."""
+
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from src.config import EMBED_MODEL
+
+
 class EmbeddingGenerator:
-    def __init__(self, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    """Generates normalized embeddings using a SentenceTransformer model."""
+
+    def __init__(self, model_name: str = EMBED_MODEL) -> None:
         self.model = SentenceTransformer(model_name, device="cpu")
 
-    def encode_batch(self, texts, batch_size=32):
-        return self.model.encode(
-            texts, batch_size=batch_size,
-            normalize_embeddings=True,   # unit vectors, so inner product = cosine similarity
-            show_progress_bar=True,
-        ).astype("float32")              # FAISS requires float32
+    @property
+    def dim(self) -> int:
+        """Return the dimensionality of the embeddings."""
+        return self.model.get_sentence_embedding_dimension()
+
+    def encode_batch(
+        self,
+        texts: list[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+    ) -> np.ndarray:
+        """Encode a list of texts into a (n, dim) float32 array of unit vectors."""
+        embeddings = self.model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=show_progress,
+            normalize_embeddings=True,
+        )
+        return np.asarray(embeddings, dtype=np.float32)
+
+    def encode(self, text: str) -> np.ndarray:
+        """Encode a single text into a (dim,) float32 unit vector."""
+        embedding = self.model.encode(
+            text,
+            normalize_embeddings=True,
+        )
+        return np.asarray(embedding, dtype=np.float32)

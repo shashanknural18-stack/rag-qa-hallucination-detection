@@ -1,17 +1,38 @@
-# src/ingestion/chunker.py
-from transformers import AutoTokenizer
+"""Text chunker: splits Documents into token-sized chunks."""
+
+from functools import lru_cache
+
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+from transformers import AutoTokenizer
 
-splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
-    tokenizer,
-    chunk_size=256,       # see note below
-    chunk_overlap=50,
-    separators=["\n\n", "\n", ". ", " ", ""],
-)
+from src.config import EMBED_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
 
-def chunk_documents(docs):
+
+@lru_cache(maxsize=1)
+def get_tokenizer() -> AutoTokenizer:
+    """Lazily load and cache the tokenizer for the embedding model."""
+    return AutoTokenizer.from_pretrained(EMBED_MODEL)
+
+
+def build_splitter(
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
+) -> RecursiveCharacterTextSplitter:
+    """Return a token-aware recursive text splitter."""
+    tokenizer = get_tokenizer()
+    return RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
+        tokenizer,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+
+
+def chunk_documents(docs: list[Document], start_id: int = 0) -> list[Document]:
+    """Split documents into chunks with sequential chunk_id metadata."""
+    splitter = build_splitter()
     chunks = splitter.split_documents(docs)
-    for i, c in enumerate(chunks):
-        c.metadata["chunk_id"] = i
+    for i, chunk in enumerate(chunks):
+        chunk.metadata["chunk_id"] = start_id + i
     return chunks
