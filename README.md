@@ -98,8 +98,13 @@ pip install -r requirements.txt
 # Create models directory
 New-Item -ItemType Directory -Force -Path models
 
-# Download via huggingface-cli
-huggingface-cli download TheBloke/Mistral-7B-Instruct-v0.2-GGUF mistral-7b-instruct-v0.2.Q4_K_M.gguf --local-dir models
+# Download via the hf tool in your venv:
+.\venv\Scripts\hf.exe download TheBloke/Mistral-7B-Instruct-v0.2-GGUF mistral-7b-instruct-v0.2.Q4_K_M.gguf --local-dir models
+```
+
+Or download directly using Python:
+```powershell
+.\venv\Scripts\python.exe -c "from huggingface_hub import hf_hub_download; hf_hub_download('TheBloke/Mistral-7B-Instruct-v0.2-GGUF', 'mistral-7b-instruct-v0.2.Q4_K_M.gguf', local_dir='models')"
 ```
 
 If `llama-cpp-python` pre-built wheels are needed on Windows:

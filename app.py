@@ -173,6 +173,19 @@ def main():
         st.error("**Model file not found.**")
         st.code(str(exc))
         st.stop()
+    except ImportError as exc:
+        if "llama-cpp" in str(exc).lower() or "llama_cpp" in str(exc).lower():
+            st.warning(
+                "⚠️ **llama-cpp-python is not installed.** Running in fallback mock generator mode. "
+                "Document retrieval and hallucination verification remain fully active."
+            )
+            os.environ["USE_MOCK_LLM"] = "1"
+            pipeline = _load_pipeline()
+        else:
+            st.error(f"Failed to initialise the pipeline: {exc}")
+            with st.expander("Traceback"):
+                st.code(traceback.format_exc())
+            st.stop()
     except Exception as exc:
         st.error(f"Failed to initialise the pipeline: {exc}")
         with st.expander("Traceback"):

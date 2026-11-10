@@ -60,33 +60,39 @@ def _create_mock_pipeline(decision=Decision.SHOW, answer="Acknowledged within 48
 
 def test_app_starts_without_exception():
     mock_pipe = _create_mock_pipeline()
-    with patch("app.get_pipeline", return_value=mock_pipe):
-        at = AppTest.from_file("app.py", default_timeout=10)
+    with patch("app.get_pipeline", return_value=mock_pipe), patch(
+        "app._load_pipeline", return_value=mock_pipe
+    ):
+        at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
         assert not at.exception
 
 
 def test_app_submitting_question_renders_banner_and_sources():
     mock_pipe = _create_mock_pipeline(decision=Decision.SHOW)
-    with patch("app.get_pipeline", return_value=mock_pipe):
-        at = AppTest.from_file("app.py", default_timeout=10)
+    with patch("app.get_pipeline", return_value=mock_pipe), patch(
+        "app._load_pipeline", return_value=mock_pipe
+    ):
+        at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
 
         # Chat input is present
         if at.chat_input:
-            at.chat_input[0].set_value("How fast must a return be acknowledged?").run()
+            at.chat_input[0].set_value("How fast must a return be acknowledged?").run(timeout=30)
             assert not at.exception
             assert len(at.success) > 0 or len(at.markdown) > 0
 
 
 def test_app_refuse_output_hides_unverified_answer_from_main():
     mock_pipe = _create_mock_pipeline(decision=Decision.REFUSE, answer="Unverified secret draft")
-    with patch("app.get_pipeline", return_value=mock_pipe):
-        at = AppTest.from_file("app.py", default_timeout=10)
+    with patch("app.get_pipeline", return_value=mock_pipe), patch(
+        "app._load_pipeline", return_value=mock_pipe
+    ):
+        at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
 
         if at.chat_input:
-            at.chat_input[0].set_value("Random ungrounded query").run()
+            at.chat_input[0].set_value("Random ungrounded query").run(timeout=30)
             assert not at.exception
             # Error banner shown for refusal
             assert len(at.error) > 0

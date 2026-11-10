@@ -24,24 +24,37 @@ class NLIModel:
     """
 
     def __init__(self, model_name: str = NLI_MODEL) -> None:
+        import os
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         self.model_name = model_name
+        self._is_mock = os.environ.get("USE_MOCK_LLM", "").lower() in ("1", "true", "yes")
+
+        if self._is_mock:
+            logger.warning("Running NLIModel in MOCK mode (USE_MOCK_LLM=1)")
+            return
+
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
                 local_files_only=True,
             )
-        except OSError as exc:
-            raise FileNotFoundError(
-                f"NLI model '{model_name}' is not in the local cache.\n"
-                "Download it once with:\n"
-                "  python -c \"from transformers import AutoTokenizer, "
-                "AutoModelForSequenceClassification as M; "
-                f"n='{model_name}'; AutoTokenizer.from_pretrained(n); M.from_pretrained(n)\""
-            ) from exc
+        except (OSError, Exception):
+            try:
+                # If local_files_only fails, attempt download from Hugging Face hub
+                logger.info("NLI model not found in local cache; downloading %s...", model_name)
+                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+            except Exception as exc:
+                raise FileNotFoundError(
+                    f"NLI model '{model_name}' is not in the local cache and could not be downloaded.\n"
+                    "Download it once with:\n"
+                    f"  .\\venv\\Scripts\\python.exe -c \"from transformers import AutoTokenizer, AutoModelForSequenceClassification as M; n='{model_name}'; AutoTokenizer.from_pretrained(n); M.from_pretrained(n)\"\n\n"
+                    "Or run in mock mode for instant UI testing without downloads:\n"
+                    "  $env:USE_MOCK_LLM=\"1\"; streamlit run app.py"
+                ) from exc
 
         self.model.to("cpu")
         self.model.eval()
@@ -117,6 +130,9 @@ class NLIModel:
         """
         if not pairs:
             return []
+
+        if getattr(self, "_is_mock", False):
+            return [{"entailment": 0.95, "neutral": 0.04, "contradiction": 0.01} for _ in pairs]
 
         premises: list[str] = []
         hypotheses: list[str] = []

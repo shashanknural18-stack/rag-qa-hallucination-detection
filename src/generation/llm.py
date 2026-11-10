@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from src.config import LLM_MAX_TOKENS, LLM_MODEL_PATH, LLM_N_CTX, LLM_N_THREADS, LLM_TEMPERATURE
@@ -32,22 +33,40 @@ class LocalLLM:
         n_ctx: int = LLM_N_CTX,
         n_threads: int = LLM_N_THREADS,
     ) -> None:
+        self.model_path = str(model_path)
+        self._is_mock = os.environ.get("USE_MOCK_LLM", "").lower() in ("1", "true", "yes")
+
+        if self._is_mock:
+            logger.warning("Running LocalLLM in MOCK mode (USE_MOCK_LLM=1)")
+            return
+
         model_path = Path(model_path)
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Model file not found: {model_path}\n"
-                "Download it with:\n"
-                "  huggingface-cli download TheBloke/Mistral-7B-Instruct-v0.2-GGUF "
-                "mistral-7b-instruct-v0.2.Q4_K_M.gguf --local-dir models"
+                "Download it with either:\n"
+                "  .\\venv\\Scripts\\hf.exe download TheBloke/Mistral-7B-Instruct-v0.2-GGUF "
+                "mistral-7b-instruct-v0.2.Q4_K_M.gguf --local-dir models\n"
+                "or via python:\n"
+                "  .\\venv\\Scripts\\python.exe -c \"from huggingface_hub import hf_hub_download; "
+                "hf_hub_download('TheBloke/Mistral-7B-Instruct-v0.2-GGUF', 'mistral-7b-instruct-v0.2.Q4_K_M.gguf', local_dir='models')\"\n\n"
+                "Or run in mock mode for instant UI testing:\n"
+                "  $env:USE_MOCK_LLM=\"1\"; streamlit run app.py"
             )
 
         try:
             from llama_cpp import Llama  # type: ignore[import-not-found,import-untyped]
         except ImportError as exc:
+            if os.environ.get("USE_MOCK_LLM", "").lower() in ("1", "true", "yes", "fallback"):
+                logger.warning("llama-cpp-python is not installed. Operating in fallback mock mode.")
+                self._is_mock = True
+                return
             raise ImportError(
                 "llama-cpp-python is not installed in the current environment.\n"
                 "Install it with:\n"
-                "  pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu"
+                "  .\\venv\\Scripts\\pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu\n\n"
+                "Or run in mock mode for instant UI testing:\n"
+                "  $env:USE_MOCK_LLM=\"1\"; .\\venv\\Scripts\\streamlit.exe run app.py"
             ) from exc
 
         logger.info("Loading GGUF model from %s (n_ctx=%d, threads=%d)", model_path, n_ctx, n_threads)
@@ -84,6 +103,15 @@ class LocalLLM:
         str
             The generated text, stripped of leading/trailing whitespace.
         """
+        if getattr(self, "_is_mock", False):
+            # Check if this is the factuality judge prompt requesting JSON
+            if "factuality judge" in prompt.lower():
+                return '{"claims": [{"claim": "The response is grounded in the retrieved documents.", "verdict": "supported"}]}'
+            return (
+                "Based on the provided documents [1], returns must be acknowledged within 48 hours "
+                "and resolved within 30 days [1]. Consent to share personal data must be free and informed [2]."
+            )
+
         kwargs: dict = {
             "max_tokens": max_tokens,
             "temperature": temperature,

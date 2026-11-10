@@ -15,6 +15,8 @@ class EmbeddingGenerator:
     @property
     def dim(self) -> int:
         """Return the dimensionality of the embeddings."""
+        if hasattr(self.model, "get_embedding_dimension"):
+            return self.model.get_embedding_dimension()
         return self.model.get_sentence_embedding_dimension()
 
     def encode_batch(
