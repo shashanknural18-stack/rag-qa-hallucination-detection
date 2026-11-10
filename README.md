@@ -1,58 +1,83 @@
 # Question Answering System Using RAG with Multi-Method Hallucination Detection
 
-A Retrieval-Augmented Generation (RAG) question-answering system that retrieves evidence from a private document collection, generates a grounded answer, and verifies it with four independent hallucination-detection methods (NLI, SelfCheckGPT, Factuality judge, Citation matching). The system produces a confidence score that decides whether to show the answer, show it with a warning, or refuse.
+A production-grade Retrieval-Augmented Generation (RAG) question-answering system that retrieves grounded evidence from a private document collection, generates answers using Mistral-7B-Instruct (quantised GGUF), and validates factual consistency using four independent detection methods (Cross-Encoder NLI, SelfCheckGPT stochastic consistency, Factuality judge, and Citation semantic matching).
 
-## Module 1 Data Flow
+---
 
-```
-data/raw/*  ->  Loader (1.1)  ->  Chunker (1.2)  ->  Embedder (1.3)  ->  FAISS index + records.json (+ manifest.json)
-```
-
-## Module 2: Query Processing
-
-`QueryProcessor` takes one shared `EmbeddingGenerator`. It keeps a whitespace-normalized raw query for the reranker and later prompt, and a cleaned query (lowercased, contractions expanded, legal punctuation kept) that is embedded with `all-MiniLM-L6-v2`.
+## Architecture Diagram
 
 ```
-user text  ->  QueryProcessor.clean  ->  QueryProcessor.embed  ->  ProcessedQuery
+                 ┌────────────────── User Question ──────────────────┐
+                 │                                                   │
+                 ▼                                                   ▼
+┌─────────────────────────────────┐                 ┌─────────────────────────────────┐
+│ Module 1: Ingestion Pipeline    │                 │ Module 2: Query Processing      │
+│  - Text Extract (PDF, TXT, MD)  │                 │  - Contraction expansion        │
+│  - Token Chunker (240 tokens)   │                 │  - Normalization & Cleaning     │
+│  - all-MiniLM-L6-v2 Embeddings  │                 │  - Dense Embedding Vector       │
+│  - FAISS Vector Store + Records │                 └────────────────┬────────────────┘
+└────────────────┬────────────────┘                                  │
+                 │                                                   │
+                 ▼                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Module 3: Hybrid Retrieval & Reranking                                              │
+│  - Dense inner-product search (top-10 candidates)                                   │
+│  - Optional BM25 sparse search + Reciprocal Rank Fusion (RRF)                       │
+│  - Cross-Encoder ms-marco-MiniLM-L-6-v2 Reranker (top-5 final chunks)               │
+│  - Early refusal if no chunks exceed MIN_RERANK_SCORE                               │
+└────────────────────────────────────────┬────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Module 4: Grounded Generation (Local CPU GGUF)                                      │
+│  - Mistral-7B-Instruct Q4 GGUF via llama-cpp-python                                 │
+│  - Strict [INST] prompt builder with numbered source chunks                         │
+│  - In-line citation parser ([n] extraction & validation)                            │
+│  - Stochastic sampling (N answers at temperature 0.7 for SelfCheckGPT)              │
+└────────────────────────────────────────┬────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Module 5: Multi-Method Hallucination Detection & Aggregation                        │
+│  1. NLI Entailment: DeBERTa-v3-small premise/hypothesis scoring (weight: 0.35)      │
+│  2. SelfCheckGPT: Agreement across stochastic samples (weight: 0.25)                │
+│  3. Factuality Judge: Atomic claim verification via LLM (weight: 0.25)              │
+│  4. Citation Support: Cosine similarity between sentences & chunks (weight: 0.15)   │
+│  -> Aggregator: Renormalized score + Hard Contradiction Cap                         │
+│  -> Final Decision: SHOW (>= 0.75) | WARN (0.50 - 0.74) | REFUSE (< 0.50)           │
+└────────────────────────────────────────┬────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Module 6: Interactive Web UI (Streamlit) & RAGPipeline Orchestrator                 │
+│  - Decision banner, confidence meter, per-sentence verification breakdown           │
+│  - Document uploader with live index rebuild                                        │
+│  - Session history, source inspector, and latency profiling                         │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Module 3: Retrieval
+---
 
-`RetrievalModule` accepts only a `ProcessedQuery`. It searches the Module 1 FAISS store for 10 candidates, optionally fuses a BM25 list, then reranks with `cross-encoder/ms-marco-MiniLM-L-6-v2` and keeps the top 5 as a `RetrievalResult`.
-
-```
-ProcessedQuery  ->  dense top-10  ->  optional BM25 + RRF  ->  rerank top-5  ->  RetrievalResult
-```
-
-```bash
-python demo_retrieval.py "How fast must a return be acknowledged?"
-python demo_retrieval.py "How fast must a return be acknowledged?" --bm25
-python demo_retrieval.py "How fast must a return be acknowledged?" --no-rerank
-```
-
-### Retrieval config
-
-| Name | Default | Meaning |
-|---|---|---|
-| `RERANK_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder used after dense search |
-| `RERANK_BATCH_SIZE` | `16` | CPU batch size for reranking |
-| `TOP_K_RETRIEVE` | `10` | Candidates from the first stage |
-| `TOP_K_FINAL` | `5` | Chunks kept after reranking |
-| `USE_BM25` | `False` | Hybrid BM25 fusion (off by default) |
-| `RRF_K` | `60` | Reciprocal rank fusion constant |
-| `MIN_RERANK_SCORE` | `0.0` | Drop reranked chunks below this 0-1 score |
-| `MAX_QUERY_CHARS` | `1000` | Longer cleaned queries are truncated |
-
-## Setup
+## Setup & Installation
 
 ### Windows (PowerShell)
 
 ```powershell
+# Clone or navigate to repository
 cd rag-qa-hallucination-detection
+
+# Create virtual environment
 python -m venv venv
-venv\Scripts\activate
+
+# If script execution is restricted in PowerShell, run:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
+
+*Note:* You can also run commands directly using `.\venv\Scripts\python.exe` without activating.
 
 ### Linux / macOS
 
@@ -63,109 +88,165 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Adding Documents
+---
 
-Place PDF, TXT, MD, or DOCX files into `data/raw/`. The pipeline will pick them up automatically.
+## Model Downloads
 
-## Running the Pipeline
+### 1. GGUF Generation Model (Mistral-7B-Instruct-v0.2 Q4_K_M)
 
-```bash
-python -m src.ingestion.pipeline
+```powershell
+# Create models directory
+New-Item -ItemType Directory -Force -Path models
+
+# Download via huggingface-cli
+huggingface-cli download TheBloke/Mistral-7B-Instruct-v0.2-GGUF mistral-7b-instruct-v0.2.Q4_K_M.gguf --local-dir models
 ```
 
-### Rebuild from Scratch
+If `llama-cpp-python` pre-built wheels are needed on Windows:
+```powershell
+pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+```
 
-If you edit or delete source documents, use `--rebuild` to clear stale chunks and re-index everything:
+### 2. Hugging Face Models (Auto-cached on first run)
+The embedder, reranker, and NLI models download automatically on first run to the local Hugging Face cache:
+- `sentence-transformers/all-MiniLM-L6-v2` (Dense Embedder)
+- `cross-encoder/ms-marco-MiniLM-L-6-v2` (Reranker)
+- `cross-encoder/nli-deberta-v3-small` (NLI Detector)
 
-```bash
+---
+
+## Ingesting Documents
+
+Place PDF, TXT, MD, or DOCX documents into `data/raw/`:
+
+```powershell
+# Ingest new/changed documents into FAISS vector store
+python -m src.ingestion.pipeline
+
+# Rebuild index from scratch
 python -m src.ingestion.pipeline --rebuild
 ```
 
-### Quick Check
+---
 
-```bash
-python quick_check.py "How fast must a return be acknowledged?"
-```
+## Running the Interactive Web App
 
-## Running Tests & Verification Guidelines
-
-### 1. Pytest Test Suites
-
-Run the full test suite (32 tests covering Ingestion, Query Processing, and Retrieval):
-
-```bash
-pytest tests/ -v
-```
-
-Run specific module test suites individually:
-
-```bash
-# Module 1 (Document Ingestion) - 11 tests
-pytest tests/test_ingestion.py -v
-
-# Module 2 (Query Processing) - 6 tests
-pytest tests/test_query.py -v
-
-# Module 3 (Retrieval & Reranking) - 15 tests
-pytest tests/test_retrieval.py -v
-```
-
-> **Tip (Offline Execution):** If running offline or in restricted network environments, set `HF_HUB_OFFLINE=1` to skip Hugging Face hub connection attempts and use locally cached models directly:
-> - **PowerShell:** `$env:HF_HUB_OFFLINE="1"; pytest tests/ -v`
-> - **Bash:** `HF_HUB_OFFLINE=1 pytest tests/ -v`
-
-### 2. End-to-End Acceptance Commands
-
-Run the full pipeline acceptance sequence:
+Launch the Streamlit interface:
 
 ```powershell
-# 1. Activate virtual environment
-venv\Scripts\activate
+streamlit run app.py
+```
+*(Or directly: `.\venv\Scripts\streamlit.exe run app.py`)*
 
-# 2. Ingest documents into vector store
-python -m src.ingestion.pipeline
+Open your browser at `http://localhost:8501`.
 
-# 3. Quick sanity check on the index
-python quick_check.py "How fast must a return be acknowledged?"
+---
 
-# 4. Dense retrieval + Cross-encoder reranking (default)
+## Command-Line Demos
+
+```powershell
+# 1. Full Detection Pipeline (Retrieval + Generation + Verification)
+python demo_detection.py "How fast must a return be acknowledged?"
+
+# 2. Generation Only (with citations)
+python demo_generation.py "How fast must a return be acknowledged?"
+
+# 3. Retrieval & Reranking Only
 python demo_retrieval.py "How fast must a return be acknowledged?"
 
-# 5. Hybrid retrieval (Dense + BM25 sparse + Reciprocal Rank Fusion + Reranking)
-python demo_retrieval.py "How fast must a return be acknowledged?" --bm25
-
-# 6. First-stage retrieval only (skip cross-encoder)
-python demo_retrieval.py "How fast must a return be acknowledged?" --no-rerank
-
-# 7. Custom top-k chunks
-python demo_retrieval.py "How fast must a return be acknowledged?" --k 3
+# 4. Multi-document query
+python demo_retrieval.py "I ordered a phone online, it arrived with a manufacturing defect, and when I tried to return it the platform said it would only process my return if I shared my Aadhaar number. What are my rights?"
 ```
 
-### 3. Sanity Benchmark Queries (Section 9 Acceptance Criteria)
+---
 
-Verify retrieval quality against the sample legal corpus (`consumer_rights.txt` and `data_privacy.txt`):
+## Configuration Settings (`src/config.py`)
 
-| Query | Expected Top-1 / Selection | Test Command |
-|---|---|---|
-| How fast must a return be acknowledged? | `consumer_rights.txt` (rank 1) | `python demo_retrieval.py "How fast must a return be acknowledged?"` |
-| What counts as a deficiency in goods? | `consumer_rights.txt` (rank 1) | `python demo_retrieval.py "What counts as a deficiency in goods?"` |
-| Can a platform force me to share my ID number? | `data_privacy.txt` (rank 1) | `python demo_retrieval.py "Can a platform force me to share my ID number?"` |
-| What kind of consent is valid? | `data_privacy.txt` (rank 1) | `python demo_retrieval.py "What kind of consent is valid?"` |
-| Long Aadhaar demo query (manufacturing defect + mandatory ID sharing) | Top-5 contains chunks from **both** files | `python demo_retrieval.py "I ordered a phone online, it arrived with a manufacturing defect, and when I tried to return it the platform said it would only process my return if I shared my Aadhaar number with their third-party pickup partner. I wasn't given a clear option to refuse. What are my rights here?"` |
+All thresholds, paths, weights, and model parameters are consolidated in `src/config.py`:
 
-### 4. Syntax & Compilation Verification
+| Parameter | Default | Environment Override | Meaning |
+|---|---|---|---|
+| `LLM_MODEL_PATH` | `models/mistral-7b-instruct-v0.2.Q4_K_M.gguf` | `LLM_MODEL_PATH` | Path to quantised GGUF model |
+| `LLM_N_THREADS` | CPU cores (e.g. 4-8) | `LLM_N_THREADS` | Inference CPU threads |
+| `THRESHOLD_SHOW` | `0.75` | `THRESHOLD_SHOW` | Minimum confidence score to display answer |
+| `THRESHOLD_WARN` | `0.50` | `THRESHOLD_WARN` | Minimum confidence score to display with warning |
+| `WEIGHTS` | `{"nli": 0.35, "selfcheck": 0.25, "factuality": 0.25, "citation": 0.15}` | — | Detection method weights (must sum to 1.0) |
+| `NLI_ENTAIL_THRESHOLD` | `0.50` | — | Entailment probability threshold for sentence support |
+| `CITATION_SUPPORT_THRESHOLD` | `0.45` | — | Cosine similarity threshold for citation validity |
+| `CONTRADICTION_CAP_THRESHOLD`| `0.80` | — | NLI contradiction probability that caps SHOW to WARN |
+| `NUM_SAMPLES_UI` | `3` | — | SelfCheckGPT stochastic sample count in UI |
+| `TOP_K_FINAL` | `5` | — | Top reranked chunks supplied to generation prompt |
 
-Ensure all source files compile cleanly without syntax errors:
+---
 
-```bash
-python -m compileall src tests demo_retrieval.py quick_check.py
+## Running Test Suites
+
+All tests use pytest with `--capture=sys` configured in `pytest.ini`:
+
+```powershell
+# Fast unit tests (skips slow model inference)
+$env:HF_HUB_OFFLINE="1"; pytest tests/ -v
+
+# Specific module tests:
+pytest tests/test_ingestion.py -v
+pytest tests/test_query.py -v
+pytest tests/test_retrieval.py -v
+pytest tests/test_generation.py -v
+pytest tests/test_detection.py -v
+pytest tests/test_pipeline.py -v
+pytest tests/test_ui_helpers.py -v
+pytest tests/test_eval.py -v
+
+# End-to-end slow tests (requires local GGUF + NLI models)
+pytest tests/test_end_to_end.py -v -m slow
 ```
+
+---
+
+## Evaluation Benchmark (`run_eval.py`)
+
+Evaluate detection accuracy, latency, and hallucination resistance against `eval/questions.json`:
+
+```powershell
+# 1. Quick evaluation (5 questions, skips LLM judge)
+python run_eval.py --limit 5 --no-judge
+
+# 2. Full benchmark run
+python run_eval.py
+
+# 3. Test refusal behavior on out-of-corpus questions only
+python run_eval.py --category unanswerable
+
+# 4. Error injection sensitivity test (tamper factual details and measure downgrades)
+python run_eval.py --inject-errors
+```
+
+Results and confusion matrices are printed to stdout and saved in `eval/results/eval_<timestamp>.json`.
+
+---
+
+## Decision Thresholds Explained
+
+- **`SHOW` (Confidence ≥ 0.75):** All sentences are strongly supported by retrieved chunks, citations are semantically aligned, and SelfCheckGPT samples agree. Displayed in green with `[n]` citations.
+- **`WARN` (0.50 ≤ Confidence < 0.75):** Some claims are partially unverified or contradicted. If NLI contradiction probability exceeds 0.80 on any sentence, the decision is capped at `WARN`. Displayed in yellow with warning text.
+- **`REFUSE` (Confidence < 0.50 or Retrieval Empty):** The system cannot verify the answer against retrieved documents. The ungrounded answer is replaced with a polite refusal message.
+
+---
+
+## System Limitations & Design Trade-offs
+
+1. **CPU Latency:** Running 7B-parameter quantised GGUF inference on CPU takes several seconds per completion. In the UI, default samples are set to 3 to balance speed and consistency verification.
+2. **NLI Numeric Reasoning:** Cross-encoder NLI models excel at semantic entailment but can miss complex arithmetic, date math, or unit conversions.
+3. **Small-Corpus Tuning:** Retrieval thresholds (`MIN_RERANK_SCORE = 0.0`) are tuned for high recall on targeted corpora.
+4. **LLM Judge Edge Cases:** Mistral-7B-Instruct serves as factuality judge. While robust against JSON schemas, severe context truncation can result in a skipped detector status.
+
+---
 
 ## Roadmap
 
 - [x] **Module 1** — Document Ingestion (loader, chunker, embedder, FAISS vector store)
-- [x] **Module 2** — Query Processing
-- [x] **Module 3** — Retrieval (dense top-10, cross-encoder rerank to top-5)
-- [ ] **Module 4** — Generation (Mistral-7B-Instruct Q4 GGUF, temp 0.1)
-- [ ] **Module 5** — Hallucination Detection (NLI, SelfCheckGPT, Factuality judge, Citation matching)
-- [ ] **Module 6** — Streamlit UI
+- [x] **Module 2** — Query Processing (cleaning, contractions, query vector)
+- [x] **Module 3** — Retrieval (dense top-10, BM25 hybrid option, cross-encoder reranking to top-5)
+- [x] **Module 4** — Generation (Mistral-7B-Instruct Q4 GGUF, citation parser, stochastic sampling)
+- [x] **Module 5** — Hallucination Detection (NLI, SelfCheckGPT, Factuality judge, Citation matching, Aggregator)
+- [x] **Module 6** — Streamlit UI & Orchestrator (`app.py`, `RAGPipeline`, evaluation benchmark)

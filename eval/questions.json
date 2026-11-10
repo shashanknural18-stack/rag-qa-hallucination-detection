@@ -1,0 +1,202 @@
+[
+  {
+    "_comment": "Evaluation questions benchmark for RAG QA & Hallucination Detection. Extend this file with questions specific to your indexed documents."
+  },
+  {
+    "id": "ans_01",
+    "question": "How fast must an e-commerce platform acknowledge a return request?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "ans_02",
+    "question": "Within how many days must a return request be resolved?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "ans_03",
+    "question": "Does a manufacturing defect qualify as a deficiency under the Consumer Protection Act?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "ans_04",
+    "question": "What remedies is a buyer entitled to when goods have a deficiency?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "ans_05",
+    "question": "What are the required conditions for valid consent to share personal data?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "ans_06",
+    "question": "Can an e-commerce platform force a consumer to share an identity number to process a return?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "ans_07",
+    "question": "Under what circumstance can a platform condition a return on sharing an identity number?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "ans_08",
+    "question": "Can a buyer request a refund for defective goods?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "ans_09",
+    "question": "Must consent for data sharing be unconditional and informed?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "ans_10",
+    "question": "Is replacement one of the buyer remedies under consumer protection law?",
+    "category": "answerable",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "unans_01",
+    "question": "Who won the 2018 FIFA World Cup?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_02",
+    "question": "What is the capital of France?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_03",
+    "question": "How do quantum computers factor large prime numbers?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_04",
+    "question": "What is the maximum penalty fine in rupees under Section 43A?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_05",
+    "question": "Who is the Chief Executive Officer of Apple Inc.?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_06",
+    "question": "How many days does a customer have to file an appeal in the National Consumer Disputes Redressal Commission?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_07",
+    "question": "What is the boiling point of ethanol at standard atmospheric pressure?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_08",
+    "question": "Which airline operates the most direct flights between Mumbai and New York?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_09",
+    "question": "What are the rules regarding data localisation for cloud servers in Frankfurt?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "unans_10",
+    "question": "What is the minimum warranty period for electronic items purchased offline?",
+    "category": "unanswerable",
+    "expected_decision": "REFUSE",
+    "expected_source": null
+  },
+  {
+    "id": "part_01",
+    "question": "How fast must a return be acknowledged and what is the exact cash penalty per day of delay?",
+    "category": "partial",
+    "expected_decision": "WARN",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "part_02",
+    "question": "Can a platform force me to share my passport details and biometric fingerprints during a product return?",
+    "category": "partial",
+    "expected_decision": "WARN",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "part_03",
+    "question": "What are my remedies for a defective product and who pays the courier return shipping charges?",
+    "category": "partial",
+    "expected_decision": "WARN",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "part_04",
+    "question": "Is informed consent needed to share data and what is the prescribed statutory form number?",
+    "category": "partial",
+    "expected_decision": "WARN",
+    "expected_source": "data_privacy.txt"
+  },
+  {
+    "id": "part_05",
+    "question": "What counts as a deficiency under the Consumer Protection Act for second-hand imported goods?",
+    "category": "partial",
+    "expected_decision": "WARN",
+    "expected_source": "consumer_rights.txt"
+  },
+  {
+    "id": "multi_01",
+    "question": "I ordered a phone online, it arrived with a manufacturing defect, and when I tried to return it the platform said it would only process my return if I shared my Aadhaar number with their pickup partner without an option to refuse. What are my rights?",
+    "category": "multi_doc",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt, data_privacy.txt"
+  },
+  {
+    "id": "multi_02",
+    "question": "Can an e-commerce platform refuse to honor my remedy of refund or replacement for a defective product if I refuse to give consent to share my ID number?",
+    "category": "multi_doc",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt, data_privacy.txt"
+  },
+  {
+    "id": "multi_03",
+    "question": "What timelines apply to my return of defective goods and under what rules may the company process my personal identity data?",
+    "category": "multi_doc",
+    "expected_decision": "SHOW",
+    "expected_source": "consumer_rights.txt, data_privacy.txt"
+  }
+]
+
