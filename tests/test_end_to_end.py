@@ -98,3 +98,4 @@ def test_e2e_planted_false_premise(real_pipeline):
     )
     assert output.final.decision in (Decision.WARN, Decision.REFUSE)
     assert len(output.final.generated.invalid_citations) == 0
+

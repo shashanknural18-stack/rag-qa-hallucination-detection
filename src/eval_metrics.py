@@ -140,3 +140,4 @@ def inject_error(text: str) -> str:
         return text[: digit_match.start()] + str(val + 99) + text[digit_match.end() :]
 
     return text + " [Factually contradicted detail: not applicable]."
+

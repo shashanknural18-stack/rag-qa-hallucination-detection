@@ -15,3 +15,4 @@ if ($Slow) {
     Write-Host "Running fast unit tests (skipping slow)..."
     .\venv\Scripts\python.exe -m pytest tests/ -v
 }
+
