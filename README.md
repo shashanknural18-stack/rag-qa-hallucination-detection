@@ -127,7 +127,7 @@ Place PDF, TXT, MD, or DOCX documents into `data/raw/`:
 ```powershell
 # Ingest new/changed documents into FAISS vector store
 python -m src.ingestion.pipeline
-
+.\venv\Scripts\python.exe -m src.ingestion.pipeline
 # Rebuild index from scratch
 python -m src.ingestion.pipeline --rebuild
 ```

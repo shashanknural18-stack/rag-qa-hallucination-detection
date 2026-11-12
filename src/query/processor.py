@@ -86,7 +86,10 @@ class QueryProcessor:
 
     def embed(self, cleaned: str) -> np.ndarray:
         """Embed a cleaned query into one L2-normalized float32 vector."""
-        vector = self.embedder.encode(cleaned)
+        from src.profiling import stage
+
+        with stage("query_embed"):
+            vector = self.embedder.encode(cleaned)
         assert vector.shape == (self.embedder.dim,)
         return vector
 

@@ -58,11 +58,19 @@ def _create_mock_pipeline(decision=Decision.SHOW, answer="Acknowledged within 48
     return mock_pipeline
 
 
+@pytest.fixture(autouse=True)
+def reset_streamlit_cache():
+    """Clear Streamlit's cache_resource before each test so each test gets its own mock pipeline."""
+    st.cache_resource.clear()
+    yield
+    st.cache_resource.clear()
+
+
 def test_app_starts_without_exception():
     mock_pipe = _create_mock_pipeline()
     with patch("app.get_pipeline", return_value=mock_pipe), patch(
         "app._load_pipeline", return_value=mock_pipe
-    ):
+    ), patch("src.pipeline.RAGPipeline", return_value=mock_pipe):
         at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
         assert not at.exception
@@ -72,7 +80,7 @@ def test_app_submitting_question_renders_banner_and_sources():
     mock_pipe = _create_mock_pipeline(decision=Decision.SHOW)
     with patch("app.get_pipeline", return_value=mock_pipe), patch(
         "app._load_pipeline", return_value=mock_pipe
-    ):
+    ), patch("src.pipeline.RAGPipeline", return_value=mock_pipe):
         at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
 
@@ -87,7 +95,7 @@ def test_app_refuse_output_hides_unverified_answer_from_main():
     mock_pipe = _create_mock_pipeline(decision=Decision.REFUSE, answer="Unverified secret draft")
     with patch("app.get_pipeline", return_value=mock_pipe), patch(
         "app._load_pipeline", return_value=mock_pipe
-    ):
+    ), patch("src.pipeline.RAGPipeline", return_value=mock_pipe):
         at = AppTest.from_file("../app.py", default_timeout=30)
         at.run()
 

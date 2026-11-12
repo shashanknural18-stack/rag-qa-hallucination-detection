@@ -54,6 +54,7 @@ class CitationDetector(BaseDetector):
         self,
         generated: GeneratedAnswer,
         sentences: list[str],
+        chunk_vectors: np.ndarray | None = None,
     ) -> DetectorResult:
         """Score citation validity and semantic support for each sentence."""
         if not sentences:
@@ -68,10 +69,13 @@ class CitationDetector(BaseDetector):
         if len(citations) != len(sentences):
             citations = (citations + [[] for _ in sentences])[: len(sentences)]
 
-        texts = list(sentences) + [chunk.text for chunk in generated.chunks]
-        vectors = np.asarray(self.embedder.encode_batch(texts), dtype=np.float32)
-        sentence_vectors = vectors[: len(sentences)]
-        chunk_vectors = vectors[len(sentences) :]
+        if chunk_vectors is not None and len(chunk_vectors) == len(generated.chunks):
+            sentence_vectors = np.asarray(self.embedder.encode_batch(list(sentences)), dtype=np.float32)
+        else:
+            texts = list(sentences) + [chunk.text for chunk in generated.chunks]
+            vectors = np.asarray(self.embedder.encode_batch(texts), dtype=np.float32)
+            sentence_vectors = vectors[: len(sentences)]
+            chunk_vectors = vectors[len(sentences) :]
         num_chunks = len(generated.chunks)
 
         sentence_scores: list[float] = []

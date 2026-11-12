@@ -2,6 +2,11 @@
 
 import os
 from pathlib import Path
+from typing import Any
+
+import psutil
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 ROOT: Path = Path(__file__).resolve().parent.parent
 RAW_DIR: Path = ROOT / "data" / "raw"
@@ -18,7 +23,8 @@ SUPPORTED_EXTENSIONS: set[str] = {".pdf", ".txt", ".md", ".docx"}
 
 # Module 2 (query processing) and Module 3 (retrieval)
 RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-RERANK_BATCH_SIZE: int = 16
+RERANK_BATCH_SIZE: int = 8
+RERANK_CANDIDATES: int = 6
 TOP_K_RETRIEVE: int = 10
 TOP_K_FINAL: int = 5
 USE_BM25: bool = False
@@ -32,12 +38,41 @@ LLM_MODEL_PATH: str = os.environ.get(
     str(ROOT / "models" / "mistral-7b-instruct-v0.2.Q4_K_M.gguf"),
 )
 LLM_N_CTX: int = 4096
-LLM_N_THREADS: int = int(os.environ.get("LLM_N_THREADS", str(os.cpu_count() or 4)))
+PHYSICAL_CORES: int = psutil.cpu_count(logical=False) or 4
+LLM_N_THREADS: int = int(os.environ.get("LLM_N_THREADS", str(PHYSICAL_CORES)))
+
+try:
+    import torch
+    torch.set_num_threads(PHYSICAL_CORES)
+except Exception:
+    pass
 LLM_TEMPERATURE: float = 0.1
 LLM_MAX_TOKENS: int = 400
 SAMPLE_TEMPERATURE: float = 0.7
 NUM_SAMPLES: int = 5
 NO_ANSWER_TEXT: str = "I don't have enough information in the documents to answer this."
+
+# Presets for Fast vs Full verification
+PRESETS: dict[str, dict[str, Any]] = {
+    "FAST": {
+        "LLM_N_CTX": 2048,
+        "LLM_MAX_TOKENS": 200,
+        "TOP_K_FINAL": 3,
+        "NUM_SAMPLES": 0,
+        "USE_JUDGE": False,
+        "RERANK_CANDIDATES": 6,
+        "MAX_CHUNK_TOKENS": 300,
+    },
+    "FULL": {
+        "LLM_N_CTX": 4096,
+        "LLM_MAX_TOKENS": 400,
+        "TOP_K_FINAL": 5,
+        "NUM_SAMPLES": 3,
+        "USE_JUDGE": True,
+        "RERANK_CANDIDATES": 10,
+        "MAX_CHUNK_TOKENS": None,
+    },
+}
 
 # Module 5 (hallucination detection)
 NLI_MODEL: str = "cross-encoder/nli-deberta-v3-small"

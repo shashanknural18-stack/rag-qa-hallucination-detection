@@ -6,6 +6,7 @@ from pathlib import Path
 from src.config import (
     INDEX_DIR,
     MIN_RERANK_SCORE,
+    RERANK_CANDIDATES,
     TOP_K_FINAL,
     TOP_K_RETRIEVE,
     USE_BM25,
@@ -31,6 +32,7 @@ class RetrievalModule:
         top_k_retrieve: int = TOP_K_RETRIEVE,
         top_k_final: int = TOP_K_FINAL,
         min_rerank_score: float = MIN_RERANK_SCORE,
+        rerank_candidates: int = RERANK_CANDIDATES,
     ) -> None:
         self.store = store
         self.reranker = reranker
@@ -38,6 +40,7 @@ class RetrievalModule:
         self.top_k_retrieve = top_k_retrieve
         self.top_k_final = top_k_final
         self.min_rerank_score = min_rerank_score
+        self.rerank_candidates = rerank_candidates
         self.dense = DenseRetriever(store)
         self.sparse = SparseRetriever(store) if use_bm25 else None
 
@@ -68,16 +71,22 @@ class RetrievalModule:
                 f"query vector shape {query.vector.shape} != ({self.store.dim},)"
             )
 
-        candidates = self.dense.search(query.vector, self.top_k_retrieve)
+        from src.profiling import stage
+
+        with stage("dense_search"):
+            candidates = self.dense.search(query.vector, self.top_k_retrieve)
         if self.use_bm25 and self.sparse is not None:
-            sparse_hits = self.sparse.search(query.cleaned, self.top_k_retrieve)
-            candidates = reciprocal_rank_fusion([candidates, sparse_hits])[
-                : self.top_k_retrieve
-            ]
+            with stage("bm25"):
+                sparse_hits = self.sparse.search(query.cleaned, self.top_k_retrieve)
+                candidates = reciprocal_rank_fusion([candidates, sparse_hits])[
+                    : self.top_k_retrieve
+                ]
 
         num_candidates = len(candidates)
         if self.reranker is not None:
-            chunks = self.reranker.rerank(query.raw, candidates, self.top_k_final)
+            candidates_to_rerank = candidates[: self.rerank_candidates]
+            with stage("rerank"):
+                chunks = self.reranker.rerank(query.raw, candidates_to_rerank, self.top_k_final)
             chunks = [
                 chunk
                 for chunk in chunks

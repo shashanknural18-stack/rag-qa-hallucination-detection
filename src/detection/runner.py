@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from src.config import NO_ANSWER_TEXT, REFUSAL_TEXT, WARNING_TEXT
 from src.detection.aggregator import aggregate
@@ -46,16 +46,16 @@ class DetectionRunner:
         self,
         generated: GeneratedAnswer,
         skip_judge: bool = False,
+        mode: str = "FULL",
+        chunk_vectors: Any = None,
     ) -> FinalResponse:
         """Detect hallucinations in *generated* and choose SHOW, WARN, or REFUSE.
 
         A generation refusal, or an answer with no chunks, skips every detector
         and returns ``REFUSE`` with the original no-answer text and confidence 0.
-        Otherwise the answer is split into sentences, the four detectors run,
-        and the aggregator picks the decision.
-
-        ``REFUSE`` replaces the answer with ``REFUSAL_TEXT``. ``WARN`` keeps the
-        answer and sets ``warning`` to ``WARNING_TEXT``. ``SHOW`` keeps the answer.
+        Otherwise cheap detectors (citation, NLI) run first. In FAST mode, expensive
+        detectors (SelfCheck, factuality judge) run only if confidence falls in the
+        WARN band; in FULL mode they run unless explicitly disabled.
 
         Parameters
         ----------
@@ -63,6 +63,10 @@ class DetectionRunner:
             Module 4 output, including chunks and any SelfCheck samples.
         skip_judge:
             When True, the factuality judge is marked skipped and not called.
+        mode:
+            Execution mode ("FAST" or "FULL").
+        chunk_vectors:
+            Pre-computed chunk embeddings to avoid re-embedding chunks for citations.
 
         Returns
         -------
@@ -79,28 +83,73 @@ class DetectionRunner:
                 generated=generated,
             )
 
+        from src.config import THRESHOLD_SHOW, THRESHOLD_WARN, WEIGHTS
+
         sentences = split_sentences(generated.answer)
-        detectors = [
-            self.nli_detector,
-            self.selfcheck_detector,
-            self.factuality_judge,
-            self.citation_detector,
-        ]
-        results: list[DetectorResult] = []
-        for detector in detectors:
-            if skip_judge and detector.name == "factuality":
-                results.append(
-                    DetectorResult(
-                        name="factuality",
-                        score=0.0,
-                        sentence_scores=[],
-                        details={},
-                        skipped=True,
-                        skip_reason="disabled",
-                    )
-                )
-                continue
-            results.append(self._run_one(detector, generated, sentences))
+
+        # 1. Run cheap detectors first: citation and NLI
+        cit_res = self._run_one(self.citation_detector, generated, sentences, chunk_vectors=chunk_vectors)
+        nli_res = self._run_one(self.nli_detector, generated, sentences)
+
+        # 2. Compute preliminary confidence from cheap detectors
+        cheap_active = [r for r in (cit_res, nli_res) if not r.skipped and r.name in WEIGHTS]
+        if cheap_active:
+            w_sum = sum(WEIGHTS[r.name] for r in cheap_active)
+            prelim_conf = sum(WEIGHTS[r.name] * r.score for r in cheap_active) / w_sum
+        else:
+            prelim_conf = 0.0
+
+        # 3. Determine if expensive detectors (SelfCheck & Judge) should run
+        is_fast = mode.upper() == "FAST"
+        in_warn_band = (THRESHOLD_WARN <= prelim_conf < THRESHOLD_SHOW)
+
+        run_expensive = (not is_fast) or in_warn_band
+
+        # SelfCheck
+        if not generated.samples:
+            sc_res = DetectorResult(
+                name="selfcheck",
+                score=0.0,
+                sentence_scores=[0.0] * len(sentences),
+                details={},
+                skipped=True,
+                skip_reason="no samples",
+            )
+        elif run_expensive:
+            sc_res = self._run_one(self.selfcheck_detector, generated, sentences)
+        else:
+            sc_res = DetectorResult(
+                name="selfcheck",
+                score=0.0,
+                sentence_scores=[0.0] * len(sentences),
+                details={},
+                skipped=True,
+                skip_reason="conditional_skip",
+            )
+
+        # Factuality Judge
+        if skip_judge:
+            judge_res = DetectorResult(
+                name="factuality",
+                score=0.0,
+                sentence_scores=[0.0] * len(sentences),
+                details={},
+                skipped=True,
+                skip_reason="disabled",
+            )
+        elif run_expensive:
+            judge_res = self._run_one(self.factuality_judge, generated, sentences)
+        else:
+            judge_res = DetectorResult(
+                name="factuality",
+                score=0.0,
+                sentence_scores=[0.0] * len(sentences),
+                details={},
+                skipped=True,
+                skip_reason="conditional_skip",
+            )
+
+        results = [nli_res, sc_res, judge_res, cit_res]
 
         report = DetectionReport(results=results, sentences=sentences)
         confidence, decision = aggregate(report)
@@ -126,10 +175,26 @@ class DetectionRunner:
             generated=generated,
         )
 
-    def _run_one(self, detector, generated: GeneratedAnswer, sentences: list[str]) -> DetectorResult:
+    def _run_one(
+        self,
+        detector,
+        generated: GeneratedAnswer,
+        sentences: list[str],
+        **kwargs: Any,
+    ) -> DetectorResult:
         """Run one detector, converting any exception into a skipped result."""
+        from src.profiling import stage
+
+        stage_name = "judge" if detector.name == "factuality" else detector.name
         try:
-            return detector.detect(generated, sentences)
+            with stage(stage_name):
+                # Only pass chunk_vectors if detector accepts it
+                if "chunk_vectors" in kwargs and hasattr(detector, "detect"):
+                    import inspect
+                    sig = inspect.signature(detector.detect)
+                    if "chunk_vectors" in sig.parameters:
+                        return detector.detect(generated, sentences, chunk_vectors=kwargs["chunk_vectors"])
+                return detector.detect(generated, sentences)
         except Exception as exc:
             logger.exception("detector %s failed", detector.name)
             return DetectorResult(

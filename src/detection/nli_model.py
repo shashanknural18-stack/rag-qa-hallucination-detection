@@ -86,8 +86,8 @@ class NLIModel:
         return max_len
 
     def _truncate_premise(self, premise: str, hypothesis: str) -> str:
-        """Shorten *premise* so the pair fits in the model window."""
-        max_len = self._max_length()
+        """Shorten *premise* so the pair fits in the model window (capped at 256 tokens)."""
+        max_len = min(self._max_length(), 256)
         hyp_ids = self.tokenizer.encode(hypothesis, add_special_tokens=False)
         budget = max_len - len(hyp_ids) - 3
         if budget < 8:

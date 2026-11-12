@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import TYPE_CHECKING
 
-from src.config import LLM_TEMPERATURE, NO_ANSWER_TEXT, NUM_SAMPLES, SAMPLE_TEMPERATURE
+from src.config import (
+    LLM_MAX_TOKENS,
+    LLM_TEMPERATURE,
+    NO_ANSWER_TEXT,
+    NUM_SAMPLES,
+    SAMPLE_TEMPERATURE,
+)
 from src.generation.citation_parser import parse_citations
 from src.generation.prompt_builder import build_prompt
 from src.generation.schemas import GeneratedAnswer
@@ -35,6 +42,8 @@ class AnswerGenerator:
         self,
         retrieval_result: "RetrievalResult",
         raw_query: str,
+        max_chunk_tokens: int | None = None,
+        max_tokens: int = LLM_MAX_TOKENS,
     ) -> GeneratedAnswer:
         """Produce a single grounded answer.
 
@@ -47,6 +56,10 @@ class AnswerGenerator:
             The output of :class:`RetrievalModule.retrieve`.
         raw_query:
             The whitespace-normalized user query.
+        max_chunk_tokens:
+            Optional cap on tokens per chunk.
+        max_tokens:
+            Maximum tokens to generate.
 
         Returns
         -------
@@ -67,15 +80,72 @@ class AnswerGenerator:
                 temperature=LLM_TEMPERATURE,
             )
 
-        prompt = build_prompt(raw_query, chunks)
-        assert self.llm is not None, "LLM must be set before calling generate()"
-        answer = self.llm.complete(prompt, temperature=LLM_TEMPERATURE)
+        from src.profiling import stage
 
+        with stage("prompt_build"):
+            prompt = build_prompt(raw_query, chunks, max_chunk_tokens=max_chunk_tokens)
+        assert self.llm is not None, "LLM must be set before calling generate()"
+        with stage("generation"):
+            answer = self.llm.complete(prompt, temperature=LLM_TEMPERATURE, max_tokens=max_tokens)
+
+        return self.build_answer_from_text(answer, retrieval_result, raw_query)
+
+    def stream(
+        self,
+        retrieval_result: "RetrievalResult",
+        raw_query: str,
+        max_chunk_tokens: int | None = None,
+        max_tokens: int = LLM_MAX_TOKENS,
+    ):
+        """Stream tokens for a grounded answer.
+
+        Yields
+        ------
+        str
+            Token strings as generated.
+        """
+        chunks = retrieval_result.chunks
+        if not chunks:
+            yield NO_ANSWER_TEXT
+            return
+
+        from src.profiling import stage
+
+        with stage("prompt_build"):
+            prompt = build_prompt(raw_query, chunks, max_chunk_tokens=max_chunk_tokens)
+        assert self.llm is not None, "LLM must be set before calling stream()"
+
+        with stage("generation") as meta:
+            t0 = time.perf_counter()
+            first_token_time = None
+            token_count = 0
+            if hasattr(self.llm, "stream"):
+                for token in self.llm.stream(prompt, temperature=LLM_TEMPERATURE, max_tokens=max_tokens):
+                    if first_token_time is None:
+                        first_token_time = time.perf_counter() - t0
+                        meta["ttft"] = round(first_token_time, 4)
+                    token_count += 1
+                    yield token
+                dur = time.perf_counter() - t0
+                if dur > 0:
+                    meta["tokens_per_sec"] = round(token_count / dur, 2)
+            else:
+                text = self.llm.complete(prompt, temperature=LLM_TEMPERATURE, max_tokens=max_tokens)
+                yield text
+
+    def build_answer_from_text(
+        self,
+        answer: str,
+        retrieval_result: "RetrievalResult",
+        raw_query: str,
+    ) -> GeneratedAnswer:
+        """Parse citations and package raw generated text into a GeneratedAnswer."""
+        chunks = retrieval_result.chunks
         valid_ids, invalid_ids = parse_citations(answer, len(chunks))
         is_refusal = NO_ANSWER_TEXT.lower() in answer.lower()
 
         logger.info(
-            "generated answer: %d chars, cited=%s, invalid=%s, refusal=%s",
+            "parsed answer: %d chars, cited=%s, invalid=%s, refusal=%s",
             len(answer),
             valid_ids,
             invalid_ids,

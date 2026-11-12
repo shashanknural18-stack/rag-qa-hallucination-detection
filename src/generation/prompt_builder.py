@@ -42,6 +42,7 @@ def build_prompt(
     chunks: list["RetrievedChunk"],
     n_ctx: int = LLM_N_CTX,
     max_tokens: int = LLM_MAX_TOKENS,
+    max_chunk_tokens: int | None = None,
 ) -> str:
     """Return a Mistral-instruct formatted prompt.
 
@@ -55,6 +56,8 @@ def build_prompt(
         Model context window in tokens.
     max_tokens:
         Tokens reserved for the generated answer.
+    max_chunk_tokens:
+        Optional per-chunk token limit (e.g. 300 for FAST mode).
 
     Returns
     -------
@@ -70,14 +73,30 @@ def build_prompt(
     available = budget - overhead_tokens
     context_parts: list[str] = []
     for idx, chunk in enumerate(chunks, start=1):
-        label = _chunk_label(idx, chunk)
+        chunk_obj = chunk
+        if max_chunk_tokens is not None:
+            words = chunk.text.split()
+            if len(words) > max_chunk_tokens:
+                from src.schemas import RetrievedChunk
+                chunk_obj = RetrievedChunk(
+                    text=" ".join(words[:max_chunk_tokens]) + " …",
+                    source=chunk.source,
+                    page=chunk.page,
+                    chunk_id=chunk.chunk_id,
+                    dense_score=chunk.dense_score,
+                    bm25_score=chunk.bm25_score,
+                    rerank_score=chunk.rerank_score,
+                    rank=chunk.rank,
+                )
+
+        label = _chunk_label(idx, chunk_obj)
         label_tokens = _count_tokens(label)
         if available - label_tokens < 0:
             # Truncate the chunk text so it fits
             safe_chars = max((available - 10) * 4, 0)
             if safe_chars > 40:
-                truncated_text = chunk.text[:safe_chars].rsplit(" ", 1)[0] + " …"
-                label = _chunk_label(idx, chunk).split("\n", 1)[0] + "\n" + truncated_text
+                truncated_text = chunk_obj.text[:safe_chars].rsplit(" ", 1)[0] + " …"
+                label = _chunk_label(idx, chunk_obj).split("\n", 1)[0] + "\n" + truncated_text
                 context_parts.append(label)
             break
         context_parts.append(label)
@@ -86,4 +105,29 @@ def build_prompt(
     context_block = "\n\n".join(context_parts)
     inner = f"{header}{context_block}{footer}"
     return f"<s>[INST] {inner} [/INST]"
+
+
+def build_chat_messages(
+    raw_query: str,
+    chunks: list["RetrievedChunk"],
+    max_chunk_tokens: int | None = None,
+) -> list[dict[str, str]]:
+    """Build chat messages structure suitable for chat templates."""
+    context_parts = []
+    for idx, chunk in enumerate(chunks, start=1):
+        text = chunk.text
+        if max_chunk_tokens is not None:
+            words = text.split()
+            if len(words) > max_chunk_tokens:
+                text = " ".join(words[:max_chunk_tokens]) + " …"
+        source = os.path.basename(chunk.source)
+        context_parts.append(f"[{idx}] (source: {source})\n{text}")
+
+    context_block = "\n\n".join(context_parts)
+    user_content = f"Context:\n{context_block}\n\nQuestion: {raw_query}"
+
+    return [
+        {"role": "system", "content": _SYSTEM},
+        {"role": "user", "content": user_content},
+    ]
 

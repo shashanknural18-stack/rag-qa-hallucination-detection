@@ -74,9 +74,82 @@ class LocalLLM:
             model_path=str(model_path),
             n_ctx=n_ctx,
             n_threads=n_threads,
+            n_batch=256,
+            use_mmap=True,
+            use_mlock=False,
             verbose=False,
         )
         self.model_path = str(model_path)
+
+    @staticmethod
+    def _clean_prompt_for_model(prompt: str) -> str:
+        """Strip explicit <s> prefix because llama-cpp-python automatically prepends BOS token."""
+        cleaned = prompt.strip()
+        if cleaned.startswith("<s>"):
+            cleaned = cleaned[3:].lstrip()
+        return cleaned
+
+    def stream(
+        self,
+        prompt: str,
+        temperature: float = LLM_TEMPERATURE,
+        max_tokens: int = LLM_MAX_TOKENS,
+        seed: int | None = None,
+    ):
+        """Stream tokens for *prompt* as they are generated.
+
+        Yields
+        ------
+        str
+            Token chunks in generation order. Joined tokens match complete().
+        """
+        if getattr(self, "_is_mock", False):
+            text = self.complete(prompt, temperature=temperature, max_tokens=max_tokens, seed=seed)
+            # Split preserving spaces so "".join(tokens) == text
+            import re
+            tokens = re.findall(r"\S+|\s+", text)
+            for token in tokens:
+                yield token
+            return
+
+        kwargs: dict = {
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+            "echo": False,
+        }
+        if seed is not None:
+            kwargs["seed"] = seed
+
+        prompt_to_send = self._clean_prompt_for_model(prompt)
+        for chunk in self._model(prompt_to_send, **kwargs):
+            text_chunk = chunk["choices"][0]["text"]
+            yield text_chunk
+
+    def create_chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = LLM_TEMPERATURE,
+        max_tokens: int = LLM_MAX_TOKENS,
+    ) -> str:
+        """Create completion using native chat template if supported, else fallback."""
+        if getattr(self, "_is_mock", False):
+            last_msg = messages[-1]["content"] if messages else ""
+            return self.complete(last_msg)
+
+        if hasattr(self, "_model") and hasattr(self._model, "create_chat_completion"):
+            try:
+                res = self._model.create_chat_completion(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return res["choices"][0]["message"]["content"].strip()
+            except Exception as exc:
+                logger.warning("create_chat_completion failed (%s); using prompt fallback", exc)
+
+        flat_prompt = "\n".join(m["content"] for m in messages)
+        return self.complete(flat_prompt, temperature=temperature, max_tokens=max_tokens)
 
     def complete(
         self,
@@ -105,8 +178,48 @@ class LocalLLM:
         """
         if getattr(self, "_is_mock", False):
             # Check if this is the factuality judge prompt requesting JSON
-            if "factuality judge" in prompt.lower():
+            if "factuality judge" in prompt.lower() or "claims" in prompt.lower():
                 return '{"claims": [{"claim": "The response is grounded in the retrieved documents.", "verdict": "supported"}]}'
+
+            import re
+            from src.config import NO_ANSWER_TEXT
+
+            context_match = re.search(r"Context:\s*(.*?)\s*Question:\s*(.*)", prompt, re.DOTALL)
+            if context_match:
+                context_str = context_match.group(1).strip()
+                question_str = context_match.group(2).replace("[/INST]", "").strip().lower()
+
+                # Parse chunk blocks: [1] (source: ...)\n<text>
+                chunk_blocks = re.findall(
+                    r"\[(\d+)\]\s*(?:\(source:[^\)]*\))?\s*\n(.*?)(?=(?:\[\d+\]|\Z))",
+                    context_str,
+                    re.DOTALL,
+                )
+
+                q_words = set(re.findall(r"\w{3,}", question_str))
+                scored_sentences: list[tuple[int, int, str]] = []
+
+                for cid_str, ctext in chunk_blocks:
+                    cid = int(cid_str)
+                    sents = [s.strip() for s in re.split(r"(?<=[.?!])\s+", ctext) if len(s.strip()) > 10]
+                    for s in sents:
+                        s_lower = s.lower()
+                        s_words = set(re.findall(r"\w{3,}", s_lower))
+                        overlap = len(q_words & s_words)
+                        if overlap > 0:
+                            scored_sentences.append((overlap, cid, s))
+
+                if scored_sentences:
+                    scored_sentences.sort(key=lambda x: x[0], reverse=True)
+                    chosen = scored_sentences[:2]
+                    parts = []
+                    for _, cid, text in chosen:
+                        clean_sent = text.rstrip(".")
+                        parts.append(f"{clean_sent} [{cid}].")
+                    return " ".join(parts)
+                else:
+                    return NO_ANSWER_TEXT
+
             return (
                 "Based on the provided documents [1], returns must be acknowledged within 48 hours "
                 "and resolved within 30 days [1]. Consent to share personal data must be free and informed [2]."
@@ -120,7 +233,8 @@ class LocalLLM:
         if seed is not None:
             kwargs["seed"] = seed
 
-        output = self._model(prompt, **kwargs)
+        prompt_to_send = self._clean_prompt_for_model(prompt)
+        output = self._model(prompt_to_send, **kwargs)
         text: str = output["choices"][0]["text"]  # type: ignore[index]
         return text.strip()
 

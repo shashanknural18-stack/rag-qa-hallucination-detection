@@ -12,11 +12,15 @@ def _identity(values):
     return values
 
 
-def _predict_logits(model: CrossEncoder, pairs: list[tuple[str, str]]) -> np.ndarray:
+def _predict_logits(
+    model: CrossEncoder,
+    pairs: list[tuple[str, str]],
+    batch_size: int = RERANK_BATCH_SIZE,
+) -> np.ndarray:
     """Return raw cross-encoder logits, with the built-in sigmoid disabled."""
     scores = model.predict(
         pairs,
-        batch_size=RERANK_BATCH_SIZE,
+        batch_size=batch_size,
         show_progress_bar=False,
         activation_fn=_identity,
     )
@@ -34,13 +38,18 @@ class CrossEncoderReranker:
         query: str,
         chunks: list[RetrievedChunk],
         top_k: int = TOP_K_FINAL,
+        batch_size: int = RERANK_BATCH_SIZE,
     ) -> list[RetrievedChunk]:
         """Rerank chunks against the raw query and assign 1-based ranks."""
         if not chunks:
             return []
 
-        pairs = [(query, chunk.text) for chunk in chunks]
-        logits = _predict_logits(self.model, pairs)
+        # Truncate each chunk to 256 tokens for faster scoring
+        truncated_pairs = [
+            (query, " ".join(chunk.text.split()[:256]))
+            for chunk in chunks
+        ]
+        logits = _predict_logits(self.model, truncated_pairs, batch_size=batch_size)
         probabilities = 1.0 / (1.0 + np.exp(-logits))
 
         updated = [

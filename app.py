@@ -11,11 +11,13 @@ import tempfile
 import traceback
 from pathlib import Path
 
+import psutil
 import streamlit as st
 
 from src.config import (
     ENABLE_JUDGE_DEFAULT,
     NUM_SAMPLES_UI,
+    PRESETS,
     UI_DEFAULT_TOP_K,
     UI_MAX_TOP_K,
     UI_TITLE,
@@ -51,7 +53,9 @@ def get_pipeline():
     """Load the RAGPipeline exactly once per Streamlit server process."""
     from src.pipeline import RAGPipeline
 
-    return RAGPipeline()
+    pipe = RAGPipeline()
+    pipe.warmup()
+    return pipe
 
 
 def _load_pipeline():
@@ -68,6 +72,27 @@ def sidebar(pipeline):
     with st.sidebar:
         st.header("⚙️ Settings")
 
+        # Memory warning for 8 GB devices
+        try:
+            avail_gb = psutil.virtual_memory().available / (1024**3)
+            if avail_gb < 1.5:
+                st.warning(
+                    f"⚠️ **Low Available RAM ({avail_gb:.2f} GB < 1.5 GB)**\n\n"
+                    "Recommend using Fast mode or a 3B model (e.g. Qwen2.5-3B-Instruct) for stability."
+                )
+        except Exception:
+            pass
+
+        # Mode preset selection
+        mode_choice = st.radio(
+            "Mode",
+            options=["Fast", "Full verification"],
+            index=0,
+            help="Fast mode limits prompt & chunk size, skips expensive detectors unless confidence is ambiguous.",
+        )
+        mode = "FAST" if mode_choice == "Fast" else "FULL"
+        preset = PRESETS.get(mode, PRESETS["FAST"])
+
         # Index stats
         stats = pipeline.index_stats()
         st.metric("Indexed files", stats["files"])
@@ -75,21 +100,22 @@ def sidebar(pipeline):
 
         st.divider()
 
-        # Retrieval controls
-        top_k = st.slider(
-            "Top-K chunks",
-            min_value=1,
-            max_value=UI_MAX_TOP_K,
-            value=UI_DEFAULT_TOP_K,
-        )
-        use_bm25 = st.toggle("Hybrid BM25", value=False)
-        use_judge = st.toggle("Factuality judge", value=ENABLE_JUDGE_DEFAULT)
-        num_samples = st.slider(
-            "SelfCheck samples",
-            min_value=0,
-            max_value=5,
-            value=NUM_SAMPLES_UI,
-        )
+        # Retrieval & Detection controls
+        with st.expander("Advanced Settings", expanded=(mode == "FULL")):
+            top_k = st.slider(
+                "Top-K chunks",
+                min_value=1,
+                max_value=UI_MAX_TOP_K,
+                value=preset["TOP_K_FINAL"],
+            )
+            use_bm25 = st.toggle("Hybrid BM25", value=False)
+            use_judge = st.toggle("Factuality judge", value=preset["USE_JUDGE"])
+            num_samples = st.slider(
+                "SelfCheck samples",
+                min_value=0,
+                max_value=5,
+                value=preset["NUM_SAMPLES"],
+            )
 
         st.divider()
 
@@ -125,6 +151,7 @@ def sidebar(pipeline):
             st.caption("No questions yet.")
 
     return {
+        "mode": mode,
         "top_k": top_k,
         "use_bm25": use_bm25,
         "use_judge": use_judge,
@@ -210,27 +237,55 @@ def main():
             "or place files in `data/raw/` and run: `python -m src.ingestion.pipeline`"
         )
 
-    # Question input
-    query = st.chat_input("Ask a question about your documents…")
+    # Question input (disabled during processing)
+    is_busy = st.session_state.get("is_processing", False)
+    query = st.chat_input("Ask a question about your documents…", disabled=is_busy)
 
-    if query:
+    if query and not is_busy:
+        st.session_state["is_processing"] = True
         try:
-            with st.spinner("Thinking…"):
-                output = pipeline.ask(
-                    query,
-                    top_k=settings["top_k"],
-                    use_bm25=settings["use_bm25"],
-                    use_judge=settings["use_judge"],
-                    num_samples=settings["num_samples"],
-                )
+            status_box = st.status("Processing query…", expanded=True)
+            with status_box:
+                st.write("🔎 Retrieving evidence chunks...")
+
+            placeholder = st.empty()
+            token_stream: list[str] = []
+
+            def handle_token(token: str) -> None:
+                token_stream.append(token)
+                placeholder.markdown("".join(token_stream) + "▌")
+
+            with status_box:
+                st.write("✍️ Generating answer...")
+
+            output = pipeline.ask(
+                query,
+                top_k=settings["top_k"],
+                use_bm25=settings["use_bm25"],
+                use_judge=settings["use_judge"],
+                num_samples=settings["num_samples"],
+                mode=settings["mode"],
+                stream_callback=handle_token,
+            )
+
+            placeholder.empty()
+
+            with status_box:
+                st.write("🛡️ Verifying answer with hallucination detectors...")
+                status_box.update(label="Done!", state="complete", expanded=False)
+
         except ValueError as exc:
             st.warning(str(exc))
+            st.session_state["is_processing"] = False
             return
         except Exception as exc:
             st.error(f"An error occurred: {exc}")
             with st.expander("Traceback"):
                 st.code(traceback.format_exc())
+            st.session_state["is_processing"] = False
             return
+        finally:
+            st.session_state["is_processing"] = False
 
         # Save to session history
         if "history" not in st.session_state:
